@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.base import Base
-from app.db.session import engine
+from app.db.session import engine, get_db
 from app.api.routes import api_router
 from app.models import Transaction, AuditLog, User, RefreshToken  # register models with Base
 
@@ -46,6 +48,29 @@ def root_health():
         "app": settings.PROJECT_NAME,
         "version": settings.VERSION,
     }
+
+
+@app.get("/health/db", tags=["system"])
+def health_db(db: Session = Depends(get_db)):
+    """Runs a simple SELECT 1 query to verify database connectivity."""
+    try:
+        result = db.execute(text("SELECT 1")).scalar()
+        return {
+            "status": "ok",
+            "database": "connected",
+            "result": result,
+            "dialect": engine.dialect.name,
+        }
+    except Exception as e:
+        logger.error("DB health check failed: %s", str(e))
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "status": "error",
+                "database": "disconnected",
+                "detail": str(e),
+            },
+        )
 
 
 import logging

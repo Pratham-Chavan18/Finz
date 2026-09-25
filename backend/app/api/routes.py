@@ -134,7 +134,7 @@ def get_public_demo_summary(db: Session = Depends(get_db)):
     try:
         bind = db.get_bind()
         if bind and bind.dialect.name == "postgresql":
-            db.execute(text("SET app.current_tenant_id = :tid"), {"tid": str(demo_tenant.id)})
+            db.execute(text("SELECT set_config('app.current_tenant_id', :tid, false)"), {"tid": str(demo_tenant.id)})
     except Exception:
         pass
 

@@ -16,8 +16,15 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
+# Explicitly load DATABASE_URL from os.environ or settings with sanitization
+raw_db_url = os.environ.get("DATABASE_URL") or settings.DATABASE_URL
+if raw_db_url:
+    raw_db_url = raw_db_url.strip().strip("'\"")
+    if raw_db_url.startswith("postgres://"):
+        raw_db_url = raw_db_url.replace("postgres://", "postgresql://", 1)
+
 # Set dynamic sqlalchemy.url from application settings (escaping % for configparser interpolation)
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL.replace("%", "%%"))
+config.set_main_option("sqlalchemy.url", raw_db_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
