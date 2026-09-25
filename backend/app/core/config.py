@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     CORS_ORIGINS: Optional[str] = None
     
     # JWT Authentication Configuration
-    JWT_SECRET_KEY: str
+    JWT_SECRET_KEY: str = "finreview-default-jwt-secret-key-32-chars-min"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
     REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -36,7 +36,9 @@ class Settings(BaseSettings):
 
     @field_validator("DATABASE_URL")
     @classmethod
-    def canonicalize_sqlite_url(cls, v: str) -> str:
+    def canonicalize_database_url(cls, v: str) -> str:
+        if v and v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql://", 1)
         if v and v.startswith("sqlite:///") and not v.startswith("sqlite:///:memory:"):
             path_part = v.replace("sqlite:///", "")
             if not Path(path_part).is_absolute():
