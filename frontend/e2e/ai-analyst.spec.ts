@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Source-Grounded AI Analyst Flow', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/login');
-    await page.fill('#email', 'analyst@finreview.test');
+    await page.fill('#email', 'analyst@finreview.com');
     await page.fill('#password', 'Password123!');
     await page.click('button[type="submit"]');
     await page.waitForURL('**/app');
@@ -17,11 +17,11 @@ test.describe('Source-Grounded AI Analyst Flow', () => {
     await expect(page.locator('text=FinReview AI Financial Analyst')).toBeVisible();
 
     // Suggested prompt pills should be clickable
-    const promptPill = page.locator('text=What was our revenue in Jan 2026?');
+    const promptPill = page.locator('button:has-text("What was our revenue in Jan 2026?")');
     await expect(promptPill).toBeVisible();
 
     // Input box should be present
-    const chatInput = page.locator('input[placeholder*="Ask a question"]');
+    const chatInput = page.locator('[placeholder*="Ask anything"]');
     await expect(chatInput).toBeVisible();
   });
 });

@@ -40,7 +40,7 @@ export default function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Step 2: Company Data
-  const [companyName, setCompanyName] = useState("");
+  const [companyName, setCompanyName] = useState("NYC Restaurant Co.");
   const [industry, setIndustry] = useState("Hospitality & Restaurants");
 
   // Step 3: Data Option

@@ -16,7 +16,9 @@ else:
         pool_pre_ping=True,
     )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+from sqlalchemy import text
+
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=engine)
 
 
 def get_db():
@@ -25,4 +27,11 @@ def get_db():
     try:
         yield db
     finally:
+        try:
+            bind = db.get_bind()
+            if bind and bind.dialect.name == "postgresql":
+                db.execute(text("RESET app.current_tenant_id; RESET app.bypass_rls;"))
+                db.commit()
+        except Exception:
+            pass
         db.close()

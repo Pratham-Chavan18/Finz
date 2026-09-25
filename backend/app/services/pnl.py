@@ -1,7 +1,9 @@
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Any, List, Optional
 from collections import defaultdict
 from sqlalchemy.orm import Session
 from app.models.transaction import Transaction
+from app.services.categorization import CHART_OF_ACCOUNTS
 
 
 def generate_monthly_pnl(
@@ -11,27 +13,37 @@ def generate_monthly_pnl(
     tenant_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Computes a deterministic monthly P&L statement from categorized transactions.
+    Computes a deterministic monthly P&L statement from categorized transactions using Decimal precision.
     Zero LLM involvement in any arithmetic path.
     Scoped to tenant_id when provided.
+
+    Uncategorized transactions are never silently dropped; they are explicitly tracked and surfaced
+    with their count, net dollar amount, and monthly breakdown.
 
     Returns:
       - months: List of distinct sorted YYYY-MM strings
       - summary: Monthly and total KPIs (Revenue, COGS, Gross Profit, Payroll, OpEx, Operating Profit)
       - sections: Hierarchical breakdowns for Revenue, COGS, Payroll, OpEx, and Non-P&L
+      - uncategorized: Explicit metadata for uncategorized/pending transactions
     """
-    query = db.query(Transaction).filter(Transaction.category.isnot(None))
+    query = db.query(Transaction)
     if tenant_id is not None:
         query = query.filter(Transaction.tenant_id == tenant_id)
 
-    transactions = query.all()
+    all_transactions = query.all()
 
-    # Data structures for accumulation
-    # bucket_data[pnl_bucket][category][month] = float
-    bucket_data = defaultdict(lambda: defaultdict(lambda: defaultdict(float)))
+    # Data structures for accumulation using Decimal
+    # bucket_data[pnl_bucket][category][month] = Decimal
+    bucket_data = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: Decimal("0.00"))))
     all_months_set = set()
 
-    for t in transactions:
+    uncategorized_txns = []
+    uncategorized_by_month = defaultdict(lambda: Decimal("0.00"))
+    uncategorized_count_by_month = defaultdict(int)
+
+    non_pnl_cats = {c["category"] for c in CHART_OF_ACCOUNTS if c.get("pnl_bucket") == "Non-P&L"}
+
+    for t in all_transactions:
         month_str = t.date.strftime("%Y-%m")
         if start_month and month_str < start_month:
             continue
@@ -39,50 +51,71 @@ def generate_monthly_pnl(
             continue
 
         all_months_set.add(month_str)
-        bucket = t.pnl_bucket or "Operating Expenses"
-        cat = t.category or "Uncategorized"
-        bucket_data[bucket][cat][month_str] += float(t.amount)
+        cat = (t.category or "").strip()
+        bucket = (t.pnl_bucket or "").strip()
+        amt = Decimal(str(t.amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+        # Check for uncategorized
+        if not cat or cat.lower() == "uncategorized":
+            uncategorized_txns.append(t)
+            uncategorized_by_month[month_str] += amt
+            uncategorized_count_by_month[month_str] += 1
+            continue
+
+        # Non-P&L
+        if bucket == "Non-P&L" or cat in non_pnl_cats:
+            bucket_data["Non-P&L"][cat][month_str] += amt
+            continue
+
+        # P&L Buckets
+        effective_bucket = bucket if bucket in ("Revenue", "COGS", "Payroll", "Operating Expenses") else "Operating Expenses"
+        bucket_data[effective_bucket][cat][month_str] += amt
 
     months = sorted(list(all_months_set))
 
-    # Helper to calculate line items
+    # Helper to calculate line items with Decimal
     def build_section(bucket_name: str, is_expense: bool = True) -> Dict[str, Any]:
         cat_dict = bucket_data.get(bucket_name, {})
         lines = []
-        section_monthly_totals = defaultdict(float)
-        section_grand_total = 0.0
+        section_monthly_totals = defaultdict(lambda: Decimal("0.00"))
+        section_grand_total = Decimal("0.00")
 
         for cat, month_map in sorted(cat_dict.items()):
             line_by_month = {}
-            line_total = 0.0
+            line_total = Decimal("0.00")
 
             for m in months:
-                raw_amt = month_map.get(m, 0.0)
+                raw_amt = month_map.get(m, Decimal("0.00"))
                 # For expenses, convert negative outflow to positive display amount
                 disp_amt = abs(raw_amt) if is_expense else raw_amt
-                disp_amt = round(disp_amt, 2)
-                line_by_month[m] = disp_amt
+                disp_amt = disp_amt.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                line_by_month[m] = float(disp_amt)
                 line_total += disp_amt
                 section_monthly_totals[m] += disp_amt
 
-            line_total = round(line_total, 2)
+            line_total = line_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             section_grand_total += line_total
 
             lines.append({
                 "category": cat,
                 "by_month": line_by_month,
-                "total": line_total,
+                "total": float(line_total),
             })
 
-        # Round section totals
-        rounded_monthly_totals = {m: round(section_monthly_totals[m], 2) for m in months}
-        rounded_grand_total = round(section_grand_total, 2)
+        # Quantize section totals
+        quantized_monthly_totals = {
+            m: float(section_monthly_totals[m].quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            for m in months
+        }
+        quantized_grand_total = float(section_grand_total.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
         return {
             "bucket": bucket_name,
-            "monthly_totals": rounded_monthly_totals,
-            "grand_total": rounded_grand_total,
+            "monthly_totals": quantized_monthly_totals,
+            "grand_total": quantized_grand_total,
             "lines": lines,
+            "_raw_monthly_totals": section_monthly_totals,
+            "_raw_grand_total": section_grand_total,
         }
 
     # Build sections
@@ -92,77 +125,85 @@ def generate_monthly_pnl(
     opex_sec = build_section("Operating Expenses", is_expense=True)
     non_pnl_sec = build_section("Non-P&L", is_expense=True)
 
-    # Compute high-level monthly summaries & totals
+    # Compute high-level monthly summaries & totals in Decimal
     summary: Dict[str, Any] = {}
 
-    total_revenue = 0.0
-    total_cogs = 0.0
-    total_gross_profit = 0.0
-    total_payroll = 0.0
-    total_opex = 0.0
-    total_all_opex = 0.0
-    total_operating_profit = 0.0
+    total_revenue_dec = Decimal("0.00")
+    total_cogs_dec = Decimal("0.00")
+    total_gross_profit_dec = Decimal("0.00")
+    total_payroll_dec = Decimal("0.00")
+    total_opex_dec = Decimal("0.00")
+    total_all_opex_dec = Decimal("0.00")
+    total_operating_profit_dec = Decimal("0.00")
 
     for m in months:
-        rev = revenue_sec["monthly_totals"].get(m, 0.0)
-        cogs = cogs_sec["monthly_totals"].get(m, 0.0)
-        gross_profit = round(rev - cogs, 2)
-        gross_margin_pct = round((gross_profit / rev * 100), 2) if rev > 0 else 0.0
+        rev_dec = revenue_sec["_raw_monthly_totals"].get(m, Decimal("0.00"))
+        cogs_dec = cogs_sec["_raw_monthly_totals"].get(m, Decimal("0.00"))
+        gross_profit_dec = (rev_dec - cogs_dec).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        gross_margin_pct = (
+            float(((gross_profit_dec / rev_dec) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            if rev_dec > Decimal("0.00") else 0.0
+        )
 
-        payroll = payroll_sec["monthly_totals"].get(m, 0.0)
-        opex = opex_sec["monthly_totals"].get(m, 0.0)
-        total_operating_exp = round(payroll + opex, 2)
+        payroll_dec = payroll_sec["_raw_monthly_totals"].get(m, Decimal("0.00"))
+        opex_dec = opex_sec["_raw_monthly_totals"].get(m, Decimal("0.00"))
+        total_operating_exp_dec = (payroll_dec + opex_dec).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-        operating_profit = round(gross_profit - total_operating_exp, 2)
-        operating_margin_pct = round((operating_profit / rev * 100), 2) if rev > 0 else 0.0
+        operating_profit_dec = (gross_profit_dec - total_operating_exp_dec).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        operating_margin_pct = (
+            float(((operating_profit_dec / rev_dec) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            if rev_dec > Decimal("0.00") else 0.0
+        )
 
         summary[m] = {
-            "revenue": rev,
-            "cogs": cogs,
-            "gross_profit": gross_profit,
+            "revenue": float(rev_dec),
+            "cogs": float(cogs_dec),
+            "gross_profit": float(gross_profit_dec),
             "gross_margin_pct": gross_margin_pct,
-            "payroll": payroll,
-            "opex": opex,
-            "total_operating_expenses": total_operating_exp,
-            "operating_profit": operating_profit,
+            "payroll": float(payroll_dec),
+            "opex": float(opex_dec),
+            "total_operating_expenses": float(total_operating_exp_dec),
+            "operating_profit": float(operating_profit_dec),
             "operating_margin_pct": operating_margin_pct,
         }
 
-        total_revenue += rev
-        total_cogs += cogs
-        total_gross_profit += gross_profit
-        total_payroll += payroll
-        total_opex += opex
-        total_all_opex += total_operating_exp
-        total_operating_profit += operating_profit
+        total_revenue_dec += rev_dec
+        total_cogs_dec += cogs_dec
+        total_gross_profit_dec += gross_profit_dec
+        total_payroll_dec += payroll_dec
+        total_opex_dec += opex_dec
+        total_all_opex_dec += total_operating_exp_dec
+        total_operating_profit_dec += operating_profit_dec
 
-    # Grand Totals
-    total_revenue = round(total_revenue, 2)
-    total_cogs = round(total_cogs, 2)
-    total_gross_profit = round(total_gross_profit, 2)
-    total_payroll = round(total_payroll, 2)
-    total_opex = round(total_opex, 2)
-    total_all_opex = round(total_all_opex, 2)
-    total_operating_profit = round(total_operating_profit, 2)
-
-    total_gross_margin = (
-        round((total_gross_profit / total_revenue * 100), 2) if total_revenue > 0 else 0.0
+    # Grand Margins
+    grand_gross_margin = (
+        float(((total_gross_profit_dec / total_revenue_dec) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        if total_revenue_dec > Decimal("0.00") else 0.0
     )
-    total_operating_margin = (
-        round((total_operating_profit / total_revenue * 100), 2) if total_revenue > 0 else 0.0
+    grand_operating_margin = (
+        float(((total_operating_profit_dec / total_revenue_dec) * Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+        if total_revenue_dec > Decimal("0.00") else 0.0
     )
 
     summary["total"] = {
-        "revenue": total_revenue,
-        "cogs": total_cogs,
-        "gross_profit": total_gross_profit,
-        "gross_margin_pct": total_gross_margin,
-        "payroll": total_payroll,
-        "opex": total_opex,
-        "total_operating_expenses": total_all_opex,
-        "operating_profit": total_operating_profit,
-        "operating_margin_pct": total_operating_margin,
+        "revenue": float(total_revenue_dec.quantize(Decimal("0.01"))),
+        "cogs": float(total_cogs_dec.quantize(Decimal("0.01"))),
+        "gross_profit": float(total_gross_profit_dec.quantize(Decimal("0.01"))),
+        "gross_margin_pct": grand_gross_margin,
+        "payroll": float(total_payroll_dec.quantize(Decimal("0.01"))),
+        "opex": float(total_opex_dec.quantize(Decimal("0.01"))),
+        "total_operating_expenses": float(total_all_opex_dec.quantize(Decimal("0.01"))),
+        "operating_profit": float(total_operating_profit_dec.quantize(Decimal("0.01"))),
+        "operating_margin_pct": grand_operating_margin,
     }
+
+    # Clean internal raw structures
+    for sec in (revenue_sec, cogs_sec, payroll_sec, opex_sec, non_pnl_sec):
+        sec.pop("_raw_monthly_totals", None)
+        sec.pop("_raw_grand_total", None)
+
+    # Compute explicit Uncategorized / Pending Review summary
+    total_uncategorized_dec = sum(uncategorized_by_month.values(), Decimal("0.00")).quantize(Decimal("0.01"))
 
     return {
         "months": months,
@@ -173,5 +214,14 @@ def generate_monthly_pnl(
             "payroll": payroll_sec,
             "opex": opex_sec,
             "non_pnl": non_pnl_sec,
+        },
+        "uncategorized": {
+            "title": "Uncategorized / Pending Review",
+            "count": len(uncategorized_txns),
+            "total_count": len(uncategorized_txns),
+            "total_amount": float(total_uncategorized_dec),
+            "by_month": {m: float(uncategorized_by_month[m].quantize(Decimal("0.01"))) for m in months},
+            "count_by_month": {m: uncategorized_count_by_month[m] for m in months},
+            "is_zero": len(uncategorized_txns) == 0,
         },
     }

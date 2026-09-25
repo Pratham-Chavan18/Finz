@@ -1,13 +1,15 @@
+from decimal import Decimal
 from typing import Optional, List, Dict, Any
 from datetime import date, datetime, timezone
 from pydantic import BaseModel, EmailStr
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request, Response, status
 from sqlalchemy.orm import Session
 from sqlalchemy import text, desc, asc, func, or_
 
 from app.db.session import get_db
 from app.core.config import settings
 from app.core.security import hash_password
+from app.core.rate_limit import check_rate_limit
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.models.transaction import Transaction, AuditLog
@@ -35,6 +37,7 @@ from app.services.categorization import (
 )
 from app.services.pnl import generate_monthly_pnl
 from app.services.variance import calculate_monthly_variances
+from app.services.reconciliation import get_reconciliation_summary
 from app.services.chat import process_financial_query
 from app.tasks.import_tasks import process_csv_import_batch
 from app.core.celery_app import dispatch_async_task
@@ -85,7 +88,7 @@ class ChartMappingRequest(BaseModel):
 # ==============================================================================
 
 @api_router.get("/health", tags=["system"])
-def health_check(db: Session = Depends(get_db)):
+def health_check(response: Response, db: Session = Depends(get_db)):
     """Health check endpoint verifying API and DB connectivity (public)."""
     db_ok = False
     try:
@@ -94,11 +97,21 @@ def health_check(db: Session = Depends(get_db)):
     except Exception:
         db_ok = False
 
+    if not db_ok:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {
+            "status": "error",
+            "app": settings.PROJECT_NAME,
+            "version": settings.VERSION,
+            "database_connected": False,
+            "detail": "PostgreSQL database connection is currently unavailable.",
+        }
+
     return {
         "status": "ok",
         "app": settings.PROJECT_NAME,
         "version": settings.VERSION,
-        "database_connected": db_ok,
+        "database_connected": True,
     }
 
 
@@ -116,6 +129,14 @@ def get_public_demo_summary(db: Session = Depends(get_db)):
 
     if not demo_tenant:
         return {"mode": "empty", "message": "No financial data connected yet."}
+
+    # Bind PostgreSQL session to the demo tenant context so RLS permits aggregation
+    try:
+        bind = db.get_bind()
+        if bind and bind.dialect.name == "postgresql":
+            db.execute(text("SET app.current_tenant_id = :tid"), {"tid": str(demo_tenant.id)})
+    except Exception:
+        pass
 
     tx_count = db.query(func.count(Transaction.id)).filter(Transaction.tenant_id == demo_tenant.id).scalar() or 0
     if tx_count == 0:
@@ -652,22 +673,51 @@ def get_import_batch_status(
 @api_router.post("/ingest", tags=["ingestion"])
 @api_router.post("/import", tags=["ingestion"])
 async def upload_transactions_csv_sync(
+    request: Request,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_accountant_user),
 ):
     """
-    Synchronous CSV ingestion fallback for immediate processing.
-    Scoped strictly to the authenticated tenant.
+    Synchronous CSV ingestion fallback with strict server-side MIME sniffing,
+    content validation, rate limiting, and tenant scoping.
     """
-    if not file.filename.endswith((".csv", ".txt")):
+    check_rate_limit(request, max_requests=10, window_seconds=60)
+
+    filename_lower = (file.filename or "").lower()
+    if not filename_lower.endswith((".csv", ".txt")):
         raise HTTPException(status_code=400, detail="Only CSV/TXT text files are supported.")
 
     try:
         content_bytes = await file.read()
-        content_str = content_bytes.decode("utf-8-sig", errors="replace")
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to read file: {str(e)}")
+
+    # 1. Size limit validation (10 MB max)
+    if len(content_bytes) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File size exceeds maximum permitted limit of 10MB.")
+
+    # 2. Content validation / Binary signature sniffing
+    binary_signatures = [b"MZ", b"\x7fELF", b"PK\x03\x04", b"%PDF", b"\xca\xfe\xba\xbe"]
+    for sig in binary_signatures:
+        if content_bytes.startswith(sig):
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded file has binary executable/archive headers and is not a valid CSV text document."
+            )
+
+    # 3. Detect null bytes
+    if b"\x00" in content_bytes[:4096]:
+        raise HTTPException(status_code=400, detail="File contains binary null characters and is not a valid CSV.")
+
+    # 4. Decode text
+    try:
+        content_str = content_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            content_str = content_bytes.decode("latin-1")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"File text encoding is unreadable: {str(e)}")
 
     records = parse_csv_content(content_str)
     if not records:
@@ -828,6 +878,19 @@ def list_audit_logs(
 # TRANSACTION QUERY ENDPOINTS (PROTECTED, TENANT-ISOLATED)
 # ==============================================================================
 
+@api_router.get("/reconciliation", tags=["financial"])
+def get_reconciliation(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Returns 4-way transaction reconciliation verifying:
+    Total Imported = P&L + Non-P&L + Uncategorized
+    Zero dropped transactions.
+    """
+    return get_reconciliation_summary(db=db, tenant_id=current_user.tenant_id)
+
+
 @api_router.get("/transactions/stats", tags=["transactions"])
 def get_transaction_stats(
     db: Session = Depends(get_db),
@@ -837,21 +900,37 @@ def get_transaction_stats(
     tenant_filter = Transaction.tenant_id == current_user.tenant_id
 
     total_count = db.query(func.count(Transaction.id)).filter(tenant_filter).scalar() or 0
-    inflows = db.query(func.sum(Transaction.amount)).filter(tenant_filter, Transaction.amount > 0).scalar() or 0.0
-    outflows = db.query(func.sum(Transaction.amount)).filter(tenant_filter, Transaction.amount < 0).scalar() or 0.0
+    inflows = db.query(func.sum(Transaction.amount)).filter(tenant_filter, Transaction.amount > 0).scalar() or Decimal("0.00")
+    outflows = db.query(func.sum(Transaction.amount)).filter(tenant_filter, Transaction.amount < 0).scalar() or Decimal("0.00")
     flagged_count = db.query(func.count(Transaction.id)).filter(tenant_filter, Transaction.is_flagged_for_review == True).scalar() or 0
     categorized_count = db.query(func.count(Transaction.id)).filter(tenant_filter, Transaction.category.isnot(None)).scalar() or 0
+
+    uncategorized_filter = (
+        tenant_filter &
+        (Transaction.category.is_(None) | (func.lower(Transaction.category) == 'uncategorized'))
+    )
+    uncategorized_count = db.query(func.count(Transaction.id)).filter(uncategorized_filter).scalar() or 0
+    uncat_debits = db.query(func.sum(Transaction.amount)).filter(uncategorized_filter, Transaction.amount < 0).scalar() or Decimal("0.00")
+    uncat_credits = db.query(func.sum(Transaction.amount)).filter(uncategorized_filter, Transaction.amount > 0).scalar() or Decimal("0.00")
+    uncat_amount = Decimal(str(uncat_debits)) + Decimal(str(uncat_credits))
 
     min_date = db.query(func.min(Transaction.date)).filter(tenant_filter).scalar()
     max_date = db.query(func.max(Transaction.date)).filter(tenant_filter).scalar()
 
+    inflows_dec = Decimal(str(inflows)).quantize(Decimal("0.01"))
+    outflows_dec = Decimal(str(outflows)).quantize(Decimal("0.01"))
+    net_dec = (inflows_dec + outflows_dec).quantize(Decimal("0.01"))
+
     return {
         "total_transactions": total_count,
-        "total_inflows": round(float(inflows), 2),
-        "total_outflows": round(float(outflows), 2),
-        "net_cash_flow": round(float(inflows + outflows), 2),
+        "total_inflows": float(inflows_dec),
+        "total_outflows": float(outflows_dec),
+        "net_cash_flow": float(net_dec),
         "categorized_count": categorized_count,
-        "uncategorized_count": total_count - categorized_count,
+        "uncategorized_count": uncategorized_count,
+        "uncategorized_amount": float(uncat_amount.quantize(Decimal("0.01"))),
+        "uncategorized_debits": float(Decimal(str(uncat_debits)).quantize(Decimal("0.01"))),
+        "uncategorized_credits": float(Decimal(str(uncat_credits)).quantize(Decimal("0.01"))),
         "flagged_count": flagged_count,
         "date_range": {
             "start": str(min_date) if min_date else None,
@@ -1075,7 +1154,17 @@ def get_metric_traceability(
     if category_filter:
         tx_query = tx_query.filter(Transaction.category.ilike(category_filter))
     if month and len(month) == 7:
-        tx_query = tx_query.filter(func.strftime("%Y-%m", Transaction.date) == month)
+        try:
+            from datetime import date
+            import calendar
+            y, m = int(month[:4]), int(month[5:7])
+            _, last_d = calendar.monthrange(y, m)
+            tx_query = tx_query.filter(
+                Transaction.date >= date(y, m, 1),
+                Transaction.date <= date(y, m, last_d),
+            )
+        except Exception:
+            pass
 
     tx_records = tx_query.order_by(desc(Transaction.date), desc(Transaction.id)).limit(200).all()
 
@@ -1240,6 +1329,7 @@ def dismiss_transaction_review_flag(
 
 @api_router.post("/chat", tags=["chat"])
 def chat_with_analyst(
+    request: Request,
     payload: ChatMessageRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -1248,6 +1338,7 @@ def chat_with_analyst(
     Executes source-grounded financial analyst query with deterministic tool-calling.
     Enforces tenant scoping, Ollama model router routing, and token usage metering.
     """
+    check_rate_limit(request, max_requests=25, window_seconds=60, identifier=str(current_user.id))
     if not payload.message.strip():
         raise HTTPException(status_code=400, detail="Message cannot be empty.")
 

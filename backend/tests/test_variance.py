@@ -158,3 +158,56 @@ def test_api_variance_endpoint(client, db_session):
     assert data["baseline_month"] == "2026-01"
     assert data["current_month"] == "2026-02"
     assert len(data["category_variances"]) == 2
+
+
+def test_driver_bounding_at_limit_5(db_session):
+    """
+    Regression test for FIX 7:
+    Verifies that driver transaction results are bounded to at most 5 records,
+    proving the fix from 'for t in txns_query:' to 'for t in txns:'.
+    """
+    # Create baseline transaction
+    db_session.add(
+        Transaction(
+            transaction_code="T-BASE",
+            date=date(2026, 1, 10),
+            description="Food Sales Baseline",
+            counterparty="Toast POS",
+            amount=10000.0,
+            category="Food Sales",
+            pnl_bucket="Revenue",
+        )
+    )
+
+    # Create 8 current-month transactions in Food Sales
+    for i in range(1, 9):
+        db_session.add(
+            Transaction(
+                transaction_code=f"T-CURR-{i}",
+                date=date(2026, 2, 10 + (i % 10)),
+                description=f"Food Sales Batch {i}",
+                counterparty=f"Customer {i}",
+                amount=2000.0 + (i * 100),
+                category="Food Sales",
+                pnl_bucket="Revenue",
+            )
+        )
+    db_session.commit()
+
+    res = calculate_monthly_variances(
+        db=db_session,
+        baseline_month="2026-01",
+        current_month="2026-02",
+        only_material=False,
+    )
+
+    food_sales = next(c for c in res["category_variances"] if c["category"] == "Food Sales")
+    drivers = food_sales["drivers"]
+    
+    # Must be bounded to at most 5 driver records
+    assert len(drivers) <= 5
+    assert len(drivers) == 5
+    # Must be sorted by absolute amount descending
+    driver_amounts = [d["amount"] for d in drivers]
+    assert driver_amounts == sorted(driver_amounts, reverse=True)
+

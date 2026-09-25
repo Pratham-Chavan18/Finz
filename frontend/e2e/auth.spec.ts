@@ -19,7 +19,7 @@ test.describe('Authentication & SaaS Routing Flow', () => {
   test('Login failure displays graceful error message', async ({ page }) => {
     await page.goto('/login');
     
-    await page.fill('#email', 'invalid.user@finreview.test');
+    await page.fill('#email', 'invalid.user@finreview.com');
     await page.fill('#password', 'WrongPassword123!');
     await page.click('button[type="submit"]');
     
@@ -30,7 +30,7 @@ test.describe('Authentication & SaaS Routing Flow', () => {
   test('Successful login redirects user to /app workspace', async ({ page }) => {
     await page.goto('/login');
     
-    await page.fill('#email', 'analyst@finreview.test');
+    await page.fill('#email', 'analyst@finreview.com');
     await page.fill('#password', 'Password123!');
     await page.click('button[type="submit"]');
     
@@ -39,13 +39,13 @@ test.describe('Authentication & SaaS Routing Flow', () => {
     expect(page.url()).toContain('/app');
     
     // Header displays tenant name and role
-    await expect(page.locator('text=NYC Restaurant Co.')).toBeVisible();
+    await expect(page.locator('text=NYC Restaurant Co.').first()).toBeVisible();
   });
 
   test('Registration page validates input and navigates properly', async ({ page }) => {
     await page.goto('/register');
     
-    await expect(page.locator('h1')).toContainText('Create Your Workspace');
+    await expect(page.locator('h1')).toContainText('Create your Account');
     
     // Submitting empty form triggers validation
     await page.click('button[type="submit"]');

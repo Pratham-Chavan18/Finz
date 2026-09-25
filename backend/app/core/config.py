@@ -55,8 +55,8 @@ class Settings(BaseSettings):
                     origins.append(cleaned)
         return origins
     
-    # Database (Default to local SQLite if Postgres not set)
-    DATABASE_URL: str = "sqlite:///./finreview.db"
+    # Database (Default to PostgreSQL)
+    DATABASE_URL: str = "postgresql://app_user:finpassword@localhost:5432/finreview"
     
     # LLM Configuration (DeepSeek & Ollama)
     DEEPSEEK_API_KEY: Optional[str] = None
@@ -110,8 +110,11 @@ class Settings(BaseSettings):
     VARIANCE_PERCENTAGE_THRESHOLD: float = 10.0  # 10%
     VARIANCE_DOLLAR_THRESHOLD: float = 1000.0   # $1,000
 
+    _project_root = Path(__file__).resolve().parent.parent.parent.parent
+    _root_env = _project_root / ".env"
+
     model_config = SettingsConfigDict(
-        env_file=(".env", "../.env"),
+        env_file=(str(_root_env), ".env", "../.env"),
         extra="ignore",
     )
 

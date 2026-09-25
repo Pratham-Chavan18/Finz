@@ -4,6 +4,8 @@ from sqlalchemy import (
     Integer,
     String,
     Float,
+    Numeric,
+    JSON,
     Date,
     DateTime,
     Boolean,
@@ -25,9 +27,10 @@ class Transaction(Base):
     description = Column(String(500), nullable=False)
     counterparty = Column(String(255), nullable=True)  # e.g. Sysco, Toast POS
     raw_payee = Column(String(255), nullable=True)
-    amount = Column(Float, nullable=False)  # positive = inflow/revenue, negative = outflow/expense
+    amount = Column(Numeric(15, 2), nullable=False)  # positive = inflow/revenue, negative = outflow/expense
     method = Column(String(100), nullable=True)  # ACH, Card, Bank deposit
     account_name = Column(String(100), default="Primary Checking")
+    raw_data = Column(JSON, nullable=True)  # Preserved original unparsed/raw record evidence
     
     # Categorization
     category = Column(String(100), nullable=True, index=True)

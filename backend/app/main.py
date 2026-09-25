@@ -39,6 +39,35 @@ def root_health():
     }
 
 
+import logging
+from fastapi import Request, status
+from fastapi.responses import JSONResponse
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
+
+logger = logging.getLogger("app.db")
+
+@app.exception_handler(OperationalError)
+async def db_operational_exception_handler(request: Request, exc: OperationalError):
+    logger.error("Database connection failure on %s: %s", request.url.path, str(exc))
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "detail": "Database service is temporarily unavailable. Please verify the PostgreSQL server is running.",
+            "error_code": "DATABASE_UNAVAILABLE",
+        },
+    )
+
+@app.exception_handler(SQLAlchemyError)
+async def sqlalchemy_exception_handler(request: Request, exc: SQLAlchemyError):
+    logger.error("Database error on %s: %s", request.url.path, str(exc))
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "A database operation error occurred.",
+            "error_code": "DATABASE_ERROR",
+        },
+    )
+
 # Include API router
 app.include_router(api_router, prefix=settings.API_V1_STR)
 

@@ -7,6 +7,7 @@ from sqlalchemy.pool import StaticPool
 from app.main import app
 from app.db.base import Base
 from app.db.session import get_db
+from decimal import Decimal
 from app.services.ingest import parse_currency, parse_date_value, parse_csv_content
 
 # In-memory SQLite for test isolation
@@ -37,13 +38,13 @@ def init_test_db():
 
 
 def test_parse_currency():
-    assert parse_currency("-$4,151.25") == -4151.25
-    assert parse_currency('"$17,513.84"') == 17513.84
-    assert parse_currency("-$875.00") == -875.00
-    assert parse_currency("$750.84") == 750.84
-    assert parse_currency("($1,250.00)") == -1250.00
-    assert parse_currency("0.00") == 0.0
-    assert parse_currency(None) == 0.0
+    assert parse_currency("-$4,151.25") == Decimal("-4151.25")
+    assert parse_currency('"$17,513.84"') == Decimal("17513.84")
+    assert parse_currency("-$875.00") == Decimal("-875.00")
+    assert parse_currency("$750.84") == Decimal("750.84")
+    assert parse_currency("($1,250.00)") == Decimal("-1250.00")
+    assert parse_currency("0.00") == Decimal("0.00")
+    assert parse_currency(None) == Decimal("0.00")
 
 
 def test_parse_date_value():
@@ -59,10 +60,10 @@ T1001,2026-01-08,POS batch deposit,Toast POS,"$17,513.84",Bank deposit
     records = parse_csv_content(sample_csv)
     assert len(records) == 2
     assert records[0]["transaction_code"] == "T1051"
-    assert records[0]["amount"] == -9000.00
+    assert records[0]["amount"] == Decimal("-9000.00")
     assert records[0]["counterparty"] == "Landlord"
     assert records[1]["transaction_code"] == "T1001"
-    assert records[1]["amount"] == 17513.84
+    assert records[1]["amount"] == Decimal("17513.84")
 
 
 def test_ingest_sample_dataset_and_queries():

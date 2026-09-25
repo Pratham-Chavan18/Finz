@@ -31,10 +31,11 @@ def process_csv_import_batch(batch_id: int, csv_content: str, tenant_id: int, us
         batch.status = "VALIDATING"
         db.commit()
 
-        records, parse_errors = parse_csv_content(csv_content)
-        if parse_errors and len(records) == 0:
+        parsed = parse_csv_content(csv_content)
+        records = parsed if isinstance(parsed, list) else parsed[0]
+        if not records:
             batch.status = "FAILED"
-            batch.error_message = "; ".join(parse_errors[:5])
+            batch.error_message = "No valid records found in CSV content."
             db.commit()
             return
 

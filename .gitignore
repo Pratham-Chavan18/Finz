@@ -6,6 +6,8 @@
 # Databases
 *.db
 *.sqlite3
+pgdata/
+pgsql/
 
 # Python caches
 __pycache__/

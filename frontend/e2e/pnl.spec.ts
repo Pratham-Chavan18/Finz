@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 test.describe('Deterministic P&L Statement Flow', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/login');
-    await page.fill('#email', 'analyst@finreview.test');
+    await page.fill('#email', 'analyst@finreview.com');
     await page.fill('#password', 'Password123!');
     await page.click('button[type="submit"]');
     await page.waitForURL('**/app');
@@ -14,7 +14,7 @@ test.describe('Deterministic P&L Statement Flow', () => {
     await page.click('[data-testid="tab-pnl"]');
 
     // Verify Statement Header
-    await expect(page.locator('text=Profit & Loss (P&L) Statement')).toBeVisible();
+    await expect(page.locator('text=Monthly Profit & Loss Statement')).toBeVisible();
 
     // Verify key financial sections exist
     await expect(page.locator('text=Revenue').first()).toBeVisible();

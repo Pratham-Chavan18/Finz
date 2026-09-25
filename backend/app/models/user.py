@@ -34,6 +34,10 @@ class User(Base):
         "RefreshToken", back_populates="user", cascade="all, delete-orphan"
     )
 
+    @property
+    def tenant_name(self) -> Optional[str]:
+        return self.tenant.name if self.tenant else None
+
 
 class RefreshToken(Base):
     __tablename__ = "refresh_tokens"

@@ -97,7 +97,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const data = await res.json();
       if (!res.ok) {
         setIsLoading(false);
-        return { success: false, error: data.detail || "Authentication failed. Please check your credentials." };
+        const errMsg = typeof data.detail === "string"
+          ? data.detail
+          : Array.isArray(data.detail) && data.detail[0]?.msg
+          ? data.detail[0].msg
+          : typeof data.detail === "object" && data.detail !== null
+          ? JSON.stringify(data.detail)
+          : "Authentication failed. Please check your credentials.";
+        return { success: false, error: errMsg };
       }
 
       setAccessToken(data.access_token);
@@ -123,7 +130,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const resData = await res.json();
       if (!res.ok) {
         setIsLoading(false);
-        return { success: false, error: resData.detail || "Registration failed." };
+        const errMsg = typeof resData.detail === "string"
+          ? resData.detail
+          : Array.isArray(resData.detail) && resData.detail[0]?.msg
+          ? resData.detail[0].msg
+          : typeof resData.detail === "object" && resData.detail !== null
+          ? JSON.stringify(resData.detail)
+          : "Registration failed.";
+        return { success: false, error: errMsg };
       }
 
       setAccessToken(resData.access_token);

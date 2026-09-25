@@ -16,7 +16,7 @@ def set_tenant_context(db: Session, tenant_id: int) -> None:
     if bind and bind.dialect.name == "postgresql":
         try:
             db.execute(
-                text("SET LOCAL app.current_tenant_id = :tenant_id"),
+                text("SET app.current_tenant_id = :tenant_id"),
                 {"tenant_id": str(tenant_id)},
             )
         except Exception as e:

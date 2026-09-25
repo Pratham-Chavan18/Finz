@@ -389,6 +389,5 @@ def update_transaction_category(
     )
     db.add(audit_entry)
     db.commit()
-    db.refresh(txn)
 
     return txn

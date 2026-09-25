@@ -105,7 +105,7 @@ class ModelRouter:
         try:
             import redis
             r = redis.Redis.from_url(settings.REDIS_URL, socket_timeout=1)
-            r.setex(cache_key, ttl_seconds, json.dumps(response_data))
+            r.setex(cache_key, ttl_seconds, json.dumps(response_data, default=str))
         except Exception:
             _IN_MEMORY_AI_CACHE[cache_key] = response_data
 

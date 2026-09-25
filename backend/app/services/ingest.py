@@ -2,15 +2,16 @@ import csv
 import io
 import os
 import re
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 from datetime import datetime, date
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 from sqlalchemy.orm import Session
 from app.models.transaction import Transaction
 
 
-def parse_currency(val: Any) -> float:
+def parse_currency(val: Any) -> Decimal:
     """
-    Cleans and parses a currency string into a float.
+    Cleans and parses a currency string into a Decimal with 2 decimal places.
     Handles:
       -$4,151.25 -> -4151.25
       "$17,513.84" -> 17513.84
@@ -19,13 +20,15 @@ def parse_currency(val: Any) -> float:
       ($1,250.00) -> -1250.00
     """
     if val is None:
-        return 0.0
+        return Decimal("0.00")
+    if isinstance(val, Decimal):
+        return val.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     if isinstance(val, (int, float)):
-        return float(val)
+        return Decimal(str(val)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     s = str(val).strip()
     if not s:
-        return 0.0
+        return Decimal("0.00")
 
     # Check for accounting parentheses e.g. ($1,250.00)
     is_negative = False
@@ -46,10 +49,10 @@ def parse_currency(val: Any) -> float:
         s = s[1:].strip()
 
     try:
-        num = float(s)
+        num = Decimal(s).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         return -num if is_negative else num
-    except ValueError:
-        return 0.0
+    except (InvalidOperation, ValueError):
+        return Decimal("0.00")
 
 
 def parse_date_value(val: Any) -> date:
@@ -104,6 +107,7 @@ def parse_csv_content(content_str: str) -> List[Dict[str, Any]]:
             "raw_payee": counterparty.strip() if counterparty else None,
             "amount": parsed_amount,
             "method": method.strip() if method else None,
+            "raw_data": dict(row),
         })
 
     return records
@@ -150,6 +154,7 @@ def ingest_records(
                 method=r.get("method"),
                 account_name="Primary Checking",
                 review_status="pending",
+                raw_data=r.get("raw_data"),
             )
             db.add(txn)
             if code:

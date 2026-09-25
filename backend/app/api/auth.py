@@ -21,6 +21,7 @@ from app.schemas.auth import (
     MessageResponse,
 )
 from app.api.deps import get_current_user
+from app.core.rate_limit import check_rate_limit
 
 auth_router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -49,6 +50,7 @@ def clear_refresh_cookie(response: Response) -> None:
 
 @auth_router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 def register(
+    request: Request,
     payload: UserRegister,
     response: Response,
     db: Session = Depends(get_db),
@@ -57,6 +59,7 @@ def register(
     Register a new user account with Argon2 password hashing.
     Issues short-lived access JWT in response body and long-lived refresh token in HttpOnly cookie.
     """
+    check_rate_limit(request, max_requests=10, window_seconds=60)
     normalized_email = payload.email.lower().strip()
     existing = db.query(User).filter(User.email == normalized_email).first()
     if existing:
@@ -125,6 +128,7 @@ def register(
 
 @auth_router.post("/login", response_model=TokenResponse)
 def login(
+    request: Request,
     payload: UserLogin,
     response: Response,
     db: Session = Depends(get_db),
@@ -133,6 +137,7 @@ def login(
     Authenticate user credentials, return short-lived access JWT,
     and attach HttpOnly refresh token cookie.
     """
+    check_rate_limit(request, max_requests=15, window_seconds=60)
     normalized_email = payload.email.lower().strip()
     user = db.query(User).filter(User.email == normalized_email).first()
     if not user or not verify_password(payload.password, user.password_hash):
@@ -184,6 +189,7 @@ def refresh_session(
     Validate refresh token cookie, rotate refresh token, and return a new access token.
     Never exposes refresh token to client-side JavaScript.
     """
+    check_rate_limit(request, max_requests=30, window_seconds=60)
     raw_token = request.cookies.get(settings.AUTH_COOKIE_NAME)
     if not raw_token:
         raise HTTPException(
