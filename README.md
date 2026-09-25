@@ -1,27 +1,11 @@
 # FinReview — AI-Native Financial Review App
 
-> **Turning raw bank transactions into an explainable, auditable monthly financial review.**  
-> Built for the **FINZ Software Engineering Internship Challenge** (Bengaluru).
+> **Turning raw bank transactions into an explainable, auditable monthly financial review.**
 
 FinReview addresses the fundamental flaw of LLMs in finance: **large language models hallucinate arithmetic**.  
 FinReview enforces a strict architectural separation of concerns:
 - **Deterministic Math Engine**: 100% pure Python/SQL calculations for all financial aggregates (Revenue, COGS, Gross Profit, Payroll, OpEx, Operating Profit, and MoM Variances). The LLM is **never** permitted to generate or touch financial totals.
 - **Source-Grounded AI Reasoning**: Explainable natural language narration, transaction driver attribution, and a conversational AI analyst where **every single answer cites concrete transaction codes** (`T1051`, `T1001`) with clickable audit chips linking to raw database records.
-
----
-
-## 🎨 Design Philosophy: Clay Design System
-
-FinReview is built using the **Clay** design system (`npx getdesign add clay`):
-- **Warm Ivory Canvas**: Soft `#fffaf0` and `#ffffff` surfaces avoiding cold, sterile clinical grays.
-- **High-Contrast Ink Typography**: Charcoal ink typography (`#1e1e24`, `#2d3142`) for maximum financial data legibility.
-- **Saturated Pastel Accents**: Semantic pill badges for financial categories:
-  - 🌿 **Mint (`#a3e635`)**: Revenue, favorable variances, verified items
-  - 🍑 **Peach (`#fca5a5`)**: COGS, expense growth, unfavorable variances
-  - 💜 **Lavender (`#c4b5fd`)**: Payroll & staff compensation
-  - 🍯 **Ochre (`#fde047`)**: Operating expenses (OpEx)
-  - 🏙️ **Slate / Silver**: Non-P&L balance sheet items (CapEx equipment assets, sales tax remittances)
-- **Tactile Depth**: 12–16px rounded pill containers, subtle hairline borders (`#e8e5de`), and soft elevation.
 
 ---
 
