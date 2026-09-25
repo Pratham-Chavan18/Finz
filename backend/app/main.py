@@ -21,9 +21,18 @@ app = FastAPI(
 )
 
 # CORS configuration
+origins = [
+    "https://finz-one.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+for origin in settings.get_cors_origins():
+    if origin not in origins:
+        origins.append(origin)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.get_cors_origins(),
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     CORS_ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "https://finz-one.vercel.app",
         "https://finreview.vercel.app",
     ]
     CORS_ORIGINS: Optional[str] = None
